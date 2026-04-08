@@ -38,11 +38,11 @@ npm run dev
 
 ```bash
 npm install
-npm run build
+npm run build:management
 ```
 
-- 构建产物：`dist/index.html`（资源已全部内联）。
-- 在 CLI Proxy API 的发布流程里会重命名为 `management.html`。
+- 构建产物：`dist/management.html`（资源已全部内联）。
+- 同时也会生成 `dist/index.html`（内容相同，便于本地预览）。
 - 本地预览：`npm run preview`
 
 提示：直接用 `file://` 打开 `dist/index.html` 可能遇到浏览器 CORS 限制；更稳妥的方式是用预览/静态服务器打开。
@@ -118,7 +118,8 @@ npm run build
 ## 构建与发布说明
 
 - 使用 Vite 输出 **单文件 HTML**（`dist/index.html`），资源全部内联（`vite-plugin-singlefile`）。
-- 打 `vX.Y.Z` 标签会触发 `.github/workflows/release.yml`，发布 `dist/management.html`。
+- `npm run build:management` 会生成用于打包/分发的 `dist/management.html`。
+- 打 `vX.Y.Z`（或 `latest`）标签会触发 `.github/workflows/release.yml`，发布 `dist/management.html`。
 - 页脚显示的 UI 版本在构建期注入（优先使用环境变量 `VERSION`，否则使用 git tag / `package.json`）。
 
 ## 安全提示

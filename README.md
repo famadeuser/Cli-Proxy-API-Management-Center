@@ -38,11 +38,11 @@ Open `http://localhost:5173`, then connect to your CLI Proxy API backend instanc
 
 ```bash
 npm install
-npm run build
+npm run build:management
 ```
 
-- Output: `dist/index.html` (all assets are inlined).
-- For CLI Proxy API bundling, the release workflow renames it to `management.html`.
+- Output: `dist/management.html` (all assets are inlined).
+- `dist/index.html` is also produced (same content) for local preview convenience.
 - To preview locally: `npm run preview`
 
 Tip: opening `dist/index.html` via `file://` may be blocked by browser CORS; serving it (preview/static server) is more reliable.
@@ -119,7 +119,8 @@ The UI language is automatically detected from browser settings and can be manua
 ## Build & release notes
 
 - Vite produces a **single HTML** output (`dist/index.html`) with all assets inlined (via `vite-plugin-singlefile`).
-- Tagging `vX.Y.Z` triggers `.github/workflows/release.yml` to publish `dist/management.html`.
+- `npm run build:management` produces `dist/management.html` for bundling/distribution.
+- Tagging `vX.Y.Z` (or `latest`) triggers `.github/workflows/release.yml` to publish `dist/management.html`.
 - The UI version shown in the footer is injected at build time (env `VERSION`, git tag, or `package.json` fallback).
 
 ## Security notes

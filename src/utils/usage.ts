@@ -69,15 +69,42 @@ export interface ApiStats {
   models: Record<string, { requests: number; successCount: number; failureCount: number; tokens: number }>;
 }
 
-export type UsageTimeRange = '7h' | '24h' | '7d' | 'all';
+export type UsageTimeRange = '7h' | '24h' | '7d' | '30d' | 'custom' | 'all';
+
+export interface UsageFilters {
+  preset: UsageTimeRange;
+  customStartDate?: string;
+  customEndDate?: string;
+  sourceId?: string;
+}
+
+export interface UsageFilterWindow {
+  startMs: number | null;
+  endMs: number | null;
+}
+
+export interface UsageSourceFilterOption {
+  value: string;
+  label: string;
+  type: string;
+  requestCount: number;
+}
+
+interface UsageSourceMetadataLike {
+  displayName?: string;
+  type?: string;
+}
 
 const TOKENS_PER_PRICE_UNIT = 1_000_000;
 const MODEL_PRICE_STORAGE_KEY = 'cli-proxy-model-prices-v2';
 const USAGE_ENDPOINT_METHOD_REGEX = /^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)/i;
-const USAGE_TIME_RANGE_MS: Record<Exclude<UsageTimeRange, 'all'>, number> = {
+const DEFAULT_USAGE_TIME_RANGE: UsageTimeRange = '24h';
+const USAGE_DATE_INPUT_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+const USAGE_TIME_RANGE_MS: Record<Exclude<UsageTimeRange, 'all' | 'custom'>, number> = {
   '7h': 7 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -110,8 +137,132 @@ const toUsageSummaryFields = (summary: UsageSummary) => ({
   total_tokens: summary.totalTokens
 });
 
-export function filterUsageByTimeRange<T>(usageData: T, range: UsageTimeRange, nowMs: number = Date.now()): T {
-  if (range === 'all') {
+const parseDateInputToMs = (value: string, endOfDay: boolean): number | null => {
+  const trimmed = value.trim();
+  const match = trimmed.match(USAGE_DATE_INPUT_REGEX);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+
+  const date = endOfDay
+    ? new Date(year, month - 1, day, 23, 59, 59, 999)
+    : new Date(year, month - 1, day, 0, 0, 0, 0);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  const timestamp = date.getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+const resolveUsageTimeWindow = (
+  filters: UsageFilters,
+  nowMs: number
+): UsageFilterWindow => {
+  if (filters.preset === 'all') {
+    return { startMs: null, endMs: null };
+  }
+
+  if (filters.preset === 'custom') {
+    const startMs = parseDateInputToMs(filters.customStartDate || '', false);
+    const endMs = parseDateInputToMs(filters.customEndDate || '', true);
+    if (startMs === null || endMs === null || startMs > endMs) {
+      return { startMs: null, endMs: null };
+    }
+    return { startMs, endMs };
+  }
+
+  const rangeMs = USAGE_TIME_RANGE_MS[filters.preset];
+  if (!Number.isFinite(rangeMs) || rangeMs <= 0) {
+    return { startMs: null, endMs: null };
+  }
+
+  return {
+    startMs: nowMs - rangeMs,
+    endMs: nowMs
+  };
+};
+
+const normalizeSourceFilterId = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return normalizeUsageSourceId(trimmed);
+};
+
+export const isUsageTimeRange = (value: unknown): value is UsageTimeRange =>
+  value === '7h' ||
+  value === '24h' ||
+  value === '7d' ||
+  value === '30d' ||
+  value === 'custom' ||
+  value === 'all';
+
+export function normalizeUsageFilters(
+  value: unknown,
+  fallbackPreset: UsageTimeRange = DEFAULT_USAGE_TIME_RANGE
+): UsageFilters {
+  if (isUsageTimeRange(value)) {
+    return { preset: value };
+  }
+
+  if (!isRecord(value)) {
+    return { preset: fallbackPreset };
+  }
+
+  const preset = isUsageTimeRange(value.preset) ? value.preset : fallbackPreset;
+  const customStartDate = typeof value.customStartDate === 'string' ? value.customStartDate.trim() : '';
+  const customEndDate = typeof value.customEndDate === 'string' ? value.customEndDate.trim() : '';
+  const sourceId = typeof value.sourceId === 'string' ? value.sourceId.trim() : '';
+
+  return {
+    preset,
+    customStartDate: customStartDate || undefined,
+    customEndDate: customEndDate || undefined,
+    sourceId: sourceId || undefined
+  };
+}
+
+export function resolveUsageFilterWindow(
+  filters: UsageFilters,
+  nowMs: number = Date.now()
+): UsageFilterWindow {
+  const normalized = normalizeUsageFilters(filters);
+  return resolveUsageTimeWindow(normalized, nowMs);
+}
+
+export function filterUsageByFilters<T>(
+  usageData: T,
+  filters: UsageFilters,
+  nowMs: number = Date.now()
+): T {
+  const normalizedFilters = normalizeUsageFilters(filters);
+  const { startMs, endMs } = resolveUsageTimeWindow(normalizedFilters, nowMs);
+  const hasTimeFilter = startMs !== null && endMs !== null;
+  const windowStart = startMs ?? Number.NEGATIVE_INFINITY;
+  const windowEnd = endMs ?? Number.POSITIVE_INFINITY;
+  const sourceFilterId = normalizeSourceFilterId(normalizedFilters.sourceId);
+  const hasSourceFilter = Boolean(sourceFilterId);
+
+  if (!hasTimeFilter && !hasSourceFilter) {
     return usageData;
   }
 
@@ -120,13 +271,6 @@ export function filterUsageByTimeRange<T>(usageData: T, range: UsageTimeRange, n
   if (!usageRecord || !apis) {
     return usageData;
   }
-
-  const rangeMs = USAGE_TIME_RANGE_MS[range];
-  if (!Number.isFinite(rangeMs) || rangeMs <= 0) {
-    return usageData;
-  }
-
-  const windowStart = nowMs - rangeMs;
   const filteredApis: Record<string, unknown> = {};
   const totalSummary = createUsageSummary();
 
@@ -155,12 +299,25 @@ export function filterUsageByTimeRange<T>(usageData: T, range: UsageTimeRange, n
 
       detailsRaw.forEach((detail) => {
         const detailRecord = isRecord(detail) ? detail : null;
-        if (!detailRecord || typeof detailRecord.timestamp !== 'string') {
+        if (!detailRecord) {
           return;
         }
-        const timestamp = Date.parse(detailRecord.timestamp);
-        if (Number.isNaN(timestamp) || timestamp < windowStart || timestamp > nowMs) {
-          return;
+
+        if (hasSourceFilter) {
+          const sourceId = normalizeUsageSourceId(detailRecord.source);
+          if (!sourceId || sourceId !== sourceFilterId) {
+            return;
+          }
+        }
+
+        if (hasTimeFilter) {
+          if (typeof detailRecord.timestamp !== 'string') {
+            return;
+          }
+          const timestamp = Date.parse(detailRecord.timestamp);
+          if (Number.isNaN(timestamp) || timestamp < windowStart || timestamp > windowEnd) {
+            return;
+          }
         }
 
         filteredDetails.push(detail);
@@ -211,6 +368,41 @@ export function filterUsageByTimeRange<T>(usageData: T, range: UsageTimeRange, n
     ...toUsageSummaryFields(totalSummary),
     apis: filteredApis
   } as T;
+}
+
+export function filterUsageByTimeRange<T>(usageData: T, range: UsageTimeRange, nowMs: number = Date.now()): T {
+  return filterUsageByFilters(usageData, { preset: range }, nowMs);
+}
+
+export function buildUsageSourceFilterOptions(
+  usageData: unknown,
+  sourceMetadata: ReadonlyMap<string, UsageSourceMetadataLike> = new Map()
+): UsageSourceFilterOption[] {
+  const details = collectUsageDetails(usageData);
+  if (!details.length) return [];
+
+  const counts = new Map<string, number>();
+  details.forEach((detail) => {
+    const sourceId = detail.source;
+    if (!sourceId) return;
+    counts.set(sourceId, (counts.get(sourceId) || 0) + 1);
+  });
+
+  return Array.from(counts.entries())
+    .map(([sourceId, requestCount]) => {
+      const metadata = sourceMetadata.get(sourceId);
+      const fallbackLabel = sourceId.startsWith('t:') ? sourceId.slice(2) : sourceId;
+      const label = metadata?.displayName?.trim() || fallbackLabel;
+      const type = metadata?.type?.trim() || '';
+
+      return {
+        value: sourceId,
+        label: label || sourceId,
+        type,
+        requestCount
+      };
+    })
+    .sort((a, b) => b.requestCount - a.requestCount || a.label.localeCompare(b.label) || a.value.localeCompare(b.value));
 }
 
 export const normalizeAuthIndex = (value: unknown) => {

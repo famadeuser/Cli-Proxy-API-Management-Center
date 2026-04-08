@@ -32,3 +32,6 @@ settings.local.json
 *.njsproj
 *.sln
 *.sw?
+.claude
+.codex
+openspec

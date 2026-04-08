@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'latest'
 
 jobs:
   build-and-release:
@@ -29,15 +30,12 @@ jobs:
         run: npm ci
 
       - name: Build all-in-one HTML
-        run: npm run build
+        run: npm run build:management
         env:
           VERSION: ${{ github.ref_name }}
 
-      - name: Prepare release assets
-        run: |
-          cd dist
-          mv index.html management.html
-          ls -lh management.html
+      - name: Verify release asset
+        run: ls -lh dist/management.html
 
       - name: Generate release notes
         run: |
@@ -50,8 +48,18 @@ jobs:
             range="${current_tag}"
           fi
 
+          digest="$(sha256sum dist/management.html | awk '{print $1}')"
+
           : > release-notes.md
           git log --pretty=format:"- %h %s" "${range}" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "## Assets" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "```yaml" >> release-notes.md
+          echo "assets:" >> release-notes.md
+          echo "  - name: management.html" >> release-notes.md
+          echo "    digest: sha256:${digest}" >> release-notes.md
+          echo "```" >> release-notes.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
